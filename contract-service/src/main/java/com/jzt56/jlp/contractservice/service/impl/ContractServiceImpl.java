@@ -1,0 +1,303 @@
+package com.jzt56.jlp.contractservice.service.impl;
+
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import com.jzt56.jlp.contractservice.entity.ResponseEntity;
+import com.jzt56.jlp.contractservice.property.UrlProperty;
+import com.jzt56.jlp.contractservice.service.ContractService;
+import com.jzt56.jlp.contractservice.template.DataGatewayTemplate;
+import com.jzt56.jlp.contractservice.util.DateUtil;
+import com.jzt56.jlp.contractservice.util.EndNodeSelector;
+import com.jzt56.jlp.contractservice.util.JsonUtils;
+import com.jzt56.jlp.contractservice.util.SeqNoUtil;
+import com.jzt56.jlp.contractservice.util.TreeBuilder;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+
+@Service
+public class ContractServiceImpl implements ContractService{
+	
+	@Autowired
+	DataGatewayTemplate dataGatewayTemplate;
+
+	@Autowired
+	UrlProperty urlProperty;
+
+	@Autowired
+	private SeqNoUtil seqNoUtil;
+	
+	/**
+	 * 根据产品类型判断从哪张产品表取数据，在保存合同时
+	 * @param Product_Type
+	 * @param warehouseService
+	 * @param transportService
+	 * @param otherService
+	 * @return
+	 */
+	private String selectService(String Product_Type,String warehouseService,String transportService,String otherService) {
+		if("委托存储产品".equals(Product_Type)) {
+			return warehouseService;
+		}else if("委托运输产品".equals(Product_Type)) {
+			return transportService;
+		}else if("物流服务产品".equals(Product_Type)) {
+			return otherService;
+		}else {
+			return null;
+		}
+	}
+	
+	/**
+	 * 通过数据库查询结果构建产品树
+	 */
+	@Override
+	public ResponseEntity BuildProductTree(ResponseEntity responseEntity) {
+		List<Map<String, Object>> nodeList = responseEntity.getMsgInfo();
+		List<Map<String, Object>> ProductTree = TreeBuilder.listToTree(nodeList,"Product_Id","SuperProduct_Id","Charging_Rule","Price_Guide");
+		return new ResponseEntity(true,ProductTree, "");
+	}
+	
+	/**
+	 * 保存合同和产品
+	 */
+	@SuppressWarnings({ "rawtypes", "unchecked" })
+	@Override
+	public String SaveContract(String jsonContract, String jsonContractProducts) {
+		List<Map<String, Object>> Contract_Id_List = new ArrayList<>();
+		try {
+		//校验产品不能为空
+		if("[]".equals(jsonContractProducts)||null == jsonContractProducts||"".equals(jsonContractProducts)) {
+			return JsonUtils.objectToJson(ResponseEntity.error("合同必须勾选产品"));
+		}
+		Map Contract = JsonUtils.jsonToPojo(jsonContract, Map.class);
+		List<Map> ContractProducts = JsonUtils.jsonToList(jsonContractProducts, Map.class);
+		List<Map<String, Object>> ContractProductList = new ArrayList<>();
+		String uuid = "";
+		//根据关联合同编号获取关联合同ID（如果传入的关联合同编号不为空则在数据库中查询合同ID是否存在存在则存入数据库，不存在则报错）
+		String associated_Contract_No = (String) Contract.get("Associated_Contract_No");
+		if(!"".equals(associated_Contract_No)&&null != associated_Contract_No) {
+			String AssociatedContractId = getAssociatedContractIdByAssociatedContractNo(Contract);
+			if("".equals(AssociatedContractId)||null == AssociatedContractId) {
+				return JsonUtils.objectToJson(new ResponseEntity(false,new ArrayList<>(),"关联合同单号不存在！"));
+			}
+			Contract.put("Associated_Contract_Id", AssociatedContractId);
+		}
+		Contract.remove("Associated_Contract_No");
+		//添加合同信息
+		if("inserted".equals(Contract.get("changetype"))) {
+			//如果是新增就生成一个ID
+			uuid = UUID.randomUUID().toString().replaceAll("-","");
+			Contract.put("Contract_No", GenerateContractNO((String)Contract.get("Operator_Id"),(String)Contract.get("ContractTemplate_Id")));
+			Contract.put("Contract_Id", uuid);
+			Contract.put("Contract_State","0");
+			Contract.put("Created_Time",DateUtil.format(new Date()));
+			Contract.put("Updated_Time",DateUtil.format(new Date()));
+		}else if("updated".equals(Contract.get("changetype"))&&Contract.get("Contract_Id")!=null) {
+			//如果是更新就使用前台传进来的ID
+			uuid = (String) Contract.get("Contract_Id");
+			Contract.put("Updated_Time",DateUtil.format(new Date()));
+			//如果合同保存状态为更新，将之前的产品记录删除
+			String ListProductJsonParas = "{\"Contract_Id\":\""+uuid+"\"}";
+			String ListProductServiceName = urlProperty.getLIST_PRODUCT_BY_CONTRACT_ID();
+			ResponseEntity responseEntity = dataGatewayTemplate.get(ListProductJsonParas, ListProductServiceName);
+			List<Map<String, Object>> products = responseEntity.getMsgInfo();
+			if(products.size()!=0) {
+				for(Map<String,Object> product : products) {
+					product.put("changetype","deleted");
+					ContractProductList.add(product);
+				}
+			}
+		}else {
+			return JsonUtils.objectToJson(new ResponseEntity(false,new ArrayList<>(),"合同录入：无法判断新增还是更新"));
+		}
+		//保存合同主信息
+		Map<String, Object> Contract_Id_Map = new HashMap<>();
+		Contract_Id_Map.put("Contract_Id", uuid);
+		Contract_Id_List.add(Contract_Id_Map);
+		ResponseEntity ContractProductResponse = new ResponseEntity(true,new ArrayList<>(),"");
+		if(ContractProducts.size()!=0) {
+			//遍历查询产品信息，并添加产品信息
+			for(Map<String,String> ContractProduct : ContractProducts) {
+					String Product_Type = ContractProduct.get("Product_Type");
+					HashMap<String, String> params = new HashMap<>();
+					params.put("Product_Id", ContractProduct.get("id"));
+					String warehouseService = urlProperty.getGET_PRODUCT_WAREHOUSE();
+					String transportService = urlProperty.getGET_PRODUCT_TRANSPORT();
+					String otherService = urlProperty.getGET_PRODUCT_OTHER();
+					String productServiceName = selectService(Product_Type,warehouseService,transportService,otherService);
+					if(null == productServiceName) {
+						return JsonUtils.objectToJson(new ResponseEntity(false,new ArrayList<Map<String, Object>>(),"产品类型参数(Product_Type)有误"));			
+					}
+					ResponseEntity responseEntity = dataGatewayTemplate.get(params, productServiceName);
+					List<Map<String, Object>> resultList = responseEntity.getMsgInfo();
+					if(resultList.size()==0) {
+						return JsonUtils.objectToJson(new ResponseEntity(false,new ArrayList<>(),ContractProduct.get("id")+"产品不存在"));
+					}
+					Map<String,Object> ContractProductDetail = (Map<String,Object>)resultList.get(0);
+					ContractProductDetail.put("Seq_No", UUID.randomUUID().toString().replaceAll("-",""));
+					ContractProductDetail.put("Contract_Id", uuid);
+					String Package_Id = ContractProduct.get("Package_Id");
+					if(null != Package_Id) {
+						ContractProductDetail.put("Package_Id", Package_Id);
+					}
+					ContractProductDetail.put("Agreement_Price", ContractProduct.get("Agreement_Price"));
+					ContractProductDetail.put("Planned_Qty", ContractProduct.get("Planned_Qty"));
+					ContractProductDetail.put("State", "0");
+					ContractProductDetail.put("changetype", "inserted");
+					ContractProductList.add(ContractProductDetail);
+			}
+		}
+		HashMap<String, String> jsonparas = new HashMap<String,String>();
+		jsonparas.put("Contract_ContractService", "["+JsonUtils.objectToJson(Contract)+"]");
+		if(ContractProductList.size()!=0) {
+			jsonparas.put("Contract_ContractProduct", "["+JsonUtils.ListToJson(ContractProductList)+"]");		
+		}
+		String contractProductServiceName = urlProperty.getCONTRACT_PRODUCT();
+		ContractProductResponse = dataGatewayTemplate.post(JsonUtils.objectToJson(jsonparas), contractProductServiceName);	
+		//处理异常
+		String errInfo = ContractProductResponse.getErrInfo();
+		if(errInfo.endsWith("for key 'UK_Contract_No'")) {
+			return JsonUtils.objectToJson(ResponseEntity.error("合同编号不能重复"));
+		}else if(errInfo.endsWith("column 'Agreement_Price' at row 1")||errInfo.endsWith("for column 'Planned_Qty' at row 1"))
+		{
+			return JsonUtils.objectToJson(ResponseEntity.error("请输入产品数量与协议价"));
+		}
+		}catch(Exception e) {
+			e.printStackTrace();
+			return JsonUtils.objectToJson(ResponseEntity.error(e.getMessage()));
+		}
+		return JsonUtils.objectToJson(new ResponseEntity(true, Contract_Id_List, ""));
+	}
+	
+	/*
+	 *合同录入左侧树形结构产品表显示，根据Operator_Id查询当前运营方所有产品列表，支持根据关键字模糊查询
+	 *当输入Contract_Id时，会根据Contract_Id查询当前合同匹配的产品列表并匹配全产品树中的产品节点，将有的
+	 *节点添加字段Selected为Y
+	 */
+	@Override
+	public String getProductTree(String Operator_Id,String Contract_Id,String KeyWords) {
+		String jsonParas = "{\"Operator_Id\":\""+Operator_Id+"\",\"KeyWords\":\""+KeyWords+"\"}";
+		String ListProductServiceName = urlProperty.getLIST_PRODUCT();
+		ResponseEntity ListProduct = dataGatewayTemplate.get(jsonParas, ListProductServiceName);
+		List<Map<String, Object>> ProductList = ListProduct.getMsgInfo();
+		if(""!=Contract_Id&&"%"!=Contract_Id) {
+			String ListProductByContractIdJsonParas = "{\"Contract_Id\":\""+Contract_Id+"\"}";
+			String ListProductByContractIdServiceName = urlProperty.getLIST_PRODUCT_BY_CONTRACT_ID();
+			ResponseEntity ListProductByContractId = dataGatewayTemplate.get(ListProductByContractIdJsonParas, ListProductByContractIdServiceName);
+			List<Map<String, Object>> ContractProductList = ListProductByContractId.getMsgInfo();
+			for(Map<String, Object> ContractProduct : ContractProductList) {
+				String ContractProductID = (String)ContractProduct.get("id");
+				for(Map<String, Object> Product : ProductList) {
+					String ProductID = (String)Product.get("id");
+					if(ProductID.equals(ContractProductID)) {
+						Product.put("Selected", "Y");
+					}
+				}
+			}
+		}
+		String ListTypeAndCategoryServiceName = urlProperty.getCONTRACT_LIST_TYPE_AND_CATEGORY();
+		ResponseEntity ListTypeAndCategory = dataGatewayTemplate.get(jsonParas, ListTypeAndCategoryServiceName);
+		List<Map<String, Object>> typeAndCategoryList = ListTypeAndCategory.getMsgInfo();
+		for(Map<String, Object> typeAndCategory : typeAndCategoryList) {
+			ProductList.add(typeAndCategory);
+		}
+		List<Map<String, Object>> listToTree = TreeBuilder.listToTree(ProductList,"id","parent_id","Charging_Rule","Price_Guide");
+		return JsonUtils.objectToJson(new ResponseEntity(true,listToTree,""));
+	}
+	
+	/**
+	 * 根据关联合同编号获取关联合同ID
+	 * @param Contract
+	 * @return
+	 */
+	public String getAssociatedContractIdByAssociatedContractNo(Map<String,Object> Contract) {
+		String Contract_No = (String) Contract.get("Associated_Contract_No");
+		String Operator_Id = (String) Contract.get("Operator_Id");
+		String jsonparas = "{\"Contract_No\":\""+Contract_No+"\",\"Operator_Id\":\""+Operator_Id+"\"}";
+		String contract_NoServiceName = urlProperty.getIS_EXIST_CONTRACT_NO_AND_OPERATOR_ID();
+		ResponseEntity responseEntity = dataGatewayTemplate.get(jsonparas, contract_NoServiceName);
+		if(responseEntity.getMsgInfo().size()>0) {
+			return (String)responseEntity.getMsgInfo().get(0).get("Contract_Id");			
+		}
+		return "";
+	}
+	
+	/**
+	 * 获取末端节点列表,如果传入的为多个TreeNode，则会遍历数组一次获取末端节点，放入一个集合中反返回
+	 */
+	@SuppressWarnings("unchecked")
+	@Override
+	public String listEndNode(String treeNode) {
+		if("[]".equals(treeNode)) {
+			return JsonUtils.objectToJson(new ResponseEntity(true,new ArrayList<>(),""));
+		}
+		List<Map<String,Object>> intitList = JsonUtils.jsonToPojo(treeNode,List.class);
+		if(intitList.size() == 0) {
+			return JsonUtils.objectToJson(new ResponseEntity(false,new ArrayList<>(),"数组不能为空"));
+		}
+		List<Map<String,Object>> treeNodeList = new ArrayList<>();
+		for(Map<String,Object> treeNodeMap : intitList) {
+			List<Map<String,Object>> resultList = EndNodeSelector.ListEndNodes(treeNodeMap);
+			for(Map<String,Object> result : resultList) {
+				result.put("Agreement_Price",result.get("Price_Guide"));
+			}
+			treeNodeList.addAll(resultList);
+		}
+		ResponseEntity responseEntity = new ResponseEntity(true,treeNodeList,"");
+		return JsonUtils.objectToJson(responseEntity);
+	}
+
+	@Override
+	public String GenerateContractNO(String Operator_Id, String ContractTemplate_Id) throws Exception {
+		String jsonParas = "{\"Operator_Id\":\""+Operator_Id+"\",\"ContractTemplate_Id\":\""+ContractTemplate_Id+"\"}";
+		String serviceName = urlProperty.getCONTRACT_GET_CONTRACT_NO_PREFIX();
+		ResponseEntity responseEntity = dataGatewayTemplate.get(jsonParas, serviceName);
+		if(!responseEntity.isFlag()&&responseEntity.getMsgInfo().size()!=0) {
+			throw new Exception("生成合同编号失败");
+		}
+		String prefix = (String)responseEntity.getMsgInfo().get(0).get("Contract_No_Prefix");
+		String[] split = prefix.split("-");
+		if(split.length > 0) {
+			String Operator_No = split[0];
+			int Operator_No_Length = Operator_No.length();
+			//运营商编号不足4位的补0
+			if( Operator_No_Length < 4){
+				for(int i = 0; i < (4-Operator_No_Length); i++) {
+					prefix = Operator_No+"0";
+				}
+				for(int j = 1; j<split.length; j++) {
+					prefix = prefix +"-"+split[j];
+				}
+			}
+		}
+		String seqNo = seqNoUtil.getSeqNo("SEQ_CONTRACT_NO");
+		return prefix+"-"+seqNo;
+	}
+
+	@Override
+	public String getPrintData(String Contract_Id) {
+		String jsonParas = "{\"Contract_Id\":\""+Contract_Id+"\"}";
+		String pringtPrimaryServiceName = urlProperty.getCONTRACT_PRINT_PRIMARY();
+		String pringtWHDetailServiceName = urlProperty.getCONTRACT_PRINT_WAREHOUSE_DETAIL();
+		String pringtTrDetailServiceName = urlProperty.getCONTRACT_PRINT_TRANSPORT_DETAIL();
+		String pringtOtDetailServiceName = urlProperty.getCONTRACT_PRINT_OTHER_DETAIL();
+		ResponseEntity responseEntityForPrimary = dataGatewayTemplate.get(jsonParas, pringtPrimaryServiceName);
+		ResponseEntity responseEntityForWHDetail = dataGatewayTemplate.get(jsonParas, pringtWHDetailServiceName);
+		ResponseEntity responseEntityForTrDetail = dataGatewayTemplate.get(jsonParas, pringtTrDetailServiceName);
+		ResponseEntity responseEntityForOtDetail = dataGatewayTemplate.get(jsonParas, pringtOtDetailServiceName);
+		if(responseEntityForPrimary.getMsgInfo().size()>0) {
+			Map<String, Object> result = responseEntityForPrimary.getMsgInfo().get(0);			
+			result.put("Detail1",responseEntityForWHDetail.getMsgInfo());
+			result.put("Detail2",responseEntityForTrDetail.getMsgInfo());
+			result.put("Detail3",responseEntityForOtDetail.getMsgInfo());
+			return JsonUtils.objectToJson(result);
+		}else {
+			return "";
+		}
+	}
+}

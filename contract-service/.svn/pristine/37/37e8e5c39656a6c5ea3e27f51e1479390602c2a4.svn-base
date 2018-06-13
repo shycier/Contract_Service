@@ -1,0 +1,168 @@
+package com.jzt56.jlp.contractservice.controller.impl;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import com.jzt56.jlp.contractservice.controller.ContractContrller;
+import com.jzt56.jlp.contractservice.property.UrlProperty;
+import com.jzt56.jlp.contractservice.service.ContractService;
+import com.jzt56.jlp.contractservice.template.DataGatewayTemplate;
+
+@RestController
+@RequestMapping("/ContractService")
+public class ContractControllerImpl implements ContractContrller {
+	
+	@Autowired
+	DataGatewayTemplate dataGatewayTemplate;
+	
+	@Autowired
+	UrlProperty urlProperty;
+	
+	@Autowired
+	ContractService contractService;
+	
+	
+	/**
+	 * 合同录入Table数据请求
+	 */
+	@Override
+	@RequestMapping(value="/ListContractByQuery",method=RequestMethod.POST)
+	public String ListContractByQuery(String Operator_Id, String KeyWords,int startIndex,int pageSize) {
+		String jsonParas = "{\"Operator_Id\":\""+Operator_Id+"\",\"KeyWords\":\""+KeyWords+"\",\"startIndex\":"+startIndex+",\"pageSize\":"+pageSize+"}";
+		String serviceName = urlProperty.getLIST_CONTRACT();
+		return dataGatewayTemplate.getForString(jsonParas, serviceName);
+	}
+	
+	/**
+	 * 合同审核Table数据请求
+	 */
+	@Override
+	@RequestMapping(value="/ListContractByAuthority",method=RequestMethod.POST)
+	public String ListContractByAuthority(String Staff_Id, String KeyWords, int startIndex, int pageSize) {
+		String Flow_Id = "900003";
+		String jsonParas = "{\"Flow_Id\":\""+Flow_Id+"\",\"Staff_Id\":\""+Staff_Id+"\",\"KeyWords\":\""+KeyWords+"\",\"startIndex\":"+startIndex+",\"pageSize\":"+pageSize+"}";
+		String serviceName = urlProperty.getCONTRACT_FLOW_CONTRACT();
+		return dataGatewayTemplate.getForString(jsonParas, serviceName);
+	}
+	
+	/**
+	 * 双击合同列表，请求合同详情
+	 */
+	@Override
+	@RequestMapping(value="/GetContractById",method=RequestMethod.POST)
+	public String GetContractById(String Contract_Id) {
+		String jsonParas = "{\"Contract_Id\":\""+Contract_Id+"\"}";
+		String serviceName = urlProperty.getGET_CONTRACT();		
+		return dataGatewayTemplate.getForString(jsonParas, serviceName);
+	}
+	
+	/**
+	 * 双击合同列表，请求合同关联产品列表
+	 */
+	@Override
+	@RequestMapping(value="/ListProductByContractId",method=RequestMethod.POST)
+	public String ListProductByContractId(String Contract_Id) {
+		String jsonparas = "{\"Contract_Id\":\""+Contract_Id+"\"}";
+		String productServiceName = urlProperty.getLIST_PRODUCT_BY_CONTRACT_ID();
+		return dataGatewayTemplate.getForString(jsonparas, productServiceName);
+	}
+	
+	/**
+	 * 保存合同与产品信息
+	 */
+	@Override
+	@RequestMapping(value="/SaveContract",method=RequestMethod.POST)
+	public String SaveContract(String Contract, String Products) {
+		return contractService.SaveContract(Contract, Products);
+	}
+	
+	
+	//********************************合同录入弹框相关方法**************************//
+	/**
+	 * 请求合同签定方列表
+	 */
+	@Override
+	@RequestMapping(value="/ListContractSignedParty",method=RequestMethod.POST)
+	public String ListContractSignedParty(String Operator_Id,String KeyWords) {
+		String jsonParas = "{\"Operator_Id\":\""+Operator_Id+"\",\"KeyWords\":\""+KeyWords+"\"}";
+		String serviceName = urlProperty.getLIST_CONTRACT_SIGNED_PARTY();	
+		return dataGatewayTemplate.getForString(jsonParas, serviceName);
+	}
+	
+	/**
+	 * 请求物流中心列表
+	 */
+	@Override
+	@RequestMapping(value="/ListLdcByOperatorId",method=RequestMethod.POST)
+	public String ListLdcByOperatorId(String Operator_Id,String KeyWords) {
+		String jsonParas = "{\"Operator_Id\":\""+Operator_Id+"\",\"KeyWords\":\""+KeyWords+"\"}";
+		String serviceName = urlProperty.getLIST_LDC();	
+		return dataGatewayTemplate.getForString(jsonParas, serviceName);
+	}
+	
+	/**
+	 * 请求合同模板列表
+	 */
+	@Override
+	@RequestMapping(value="/ListSimpleContractTemplate",method=RequestMethod.POST)
+	public String ListSimpleContractTemplate(String Operator_Id,String KeyWords) {
+		String jsonParas = "{\"Operator_Id\":\""+Operator_Id+"\",\"KeyWords\":\""+KeyWords+"\"}";
+		String serviceName = urlProperty.getLIST_SIMPLE_CONTRACT_TEMPLATE();	
+		return dataGatewayTemplate.getForString(jsonParas, serviceName);
+	}
+	
+	/**
+	 * 请求运营方列表
+	 */
+	@Override
+	@RequestMapping(value="/ListOperator",method=RequestMethod.POST)
+	public String ListOperator(String Operator_Ids,String KeyWords) {
+		String jsonParas = "{\"Operator_Ids\":\""+Operator_Ids+"\",\"KeyWords\":\""+KeyWords+"\"}";
+		String serviceName = urlProperty.getLIST_OPERATOR();		
+		return dataGatewayTemplate.getForString(jsonParas, serviceName);
+	}
+	
+	//********************产品树相关操作***************************************//
+	/**
+	 * 获取成本价
+	 */
+	@Override
+	@RequestMapping(value="/GetPriceCost",method=RequestMethod.POST)
+	public String GetPriceCost(String Product_Id) {
+		String jsonParas = "{\"Product_Id\":\""+Product_Id+"\"}";
+		String serviceName = urlProperty.getGET_PRICE_COST();		
+		return dataGatewayTemplate.getForString(jsonParas, serviceName);
+	}
+	
+	/**
+	 * 根据关键字获取左下角产品树
+	 */
+	@Override
+	@RequestMapping(value="/GetProductTreeByQuery",method=RequestMethod.POST)
+	public String GetProductTreeByQuery(String Operator_Id,String Contract_Id, String KeyWords) {
+		return contractService.getProductTree(Operator_Id,Contract_Id,KeyWords);
+	}
+	
+	
+	/**
+	 * 合同录入左下角产品树，点击一行获取当前行末端节点
+	 */
+	@Override
+	@RequestMapping(value="/ListEndNode",method=RequestMethod.POST)
+	public String ListEndNode(String treeNode) {
+		return contractService.listEndNode(treeNode);
+	}
+	
+	//********************打印相关操作***************************************//
+	/**
+	 * 获取打印数据
+	 */
+	@Override	
+	@RequestMapping(value="/GetPrintData",method=RequestMethod.GET)
+	public String GetPrintData(@RequestParam("Contract_Id") String Contract_Id) {
+		return contractService.getPrintData(Contract_Id);
+	}
+
+}

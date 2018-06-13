@@ -1,0 +1,10 @@
+Manifest-Version: 1.0
+Implementation-Title: jzyc-contract
+Implementation-Version: 20180608
+Built-By: fxy
+Implementation-Vendor-Id: com.jzt56.as
+Build-Jdk: 1.8.0_152
+Implementation-URL: https://projects.spring.io/spring-boot/#/spring-bo
+ ot-starter-parent/jzyc-contract
+Created-By: Maven Integration for Eclipse
+
